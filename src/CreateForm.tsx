@@ -4,7 +4,6 @@ import "./CreateForm.css";
 // Define types based on the backend data models
 type QuestionType =
   | "multiple_choice"
-  | "text"
   | "rating"
   | "checkboxes"
   | "paragraph"
@@ -13,6 +12,13 @@ type QuestionType =
 interface Option {
   value: string;
   label: string;
+  target_section?: string;
+}
+
+interface Section {
+  id: string;
+  name: string;
+  order: number;
 }
 
 interface Question {
@@ -21,9 +27,11 @@ interface Question {
   options?: Option[];
   order: number;
   is_required: boolean;
+  section_id?: { [key: number]: string };
   rating_min?: number;
   rating_max?: number;
   rating_labels?: Record<number, string>;
+  bun_gi?: number[];
 }
 
 interface SurveyFormData {
@@ -31,6 +39,7 @@ interface SurveyFormData {
   description?: string;
   is_active: boolean;
   questions: Question[];
+  sections: Section[];
 }
 
 export default function CreateForm() {
@@ -39,18 +48,33 @@ export default function CreateForm() {
     description: "",
     is_active: true,
     questions: [],
+    sections: [
+      {
+        id: "1",
+        name: "기본",
+        order: 1,
+      },
+    ],
   });
 
   const [currentQuestion, setCurrentQuestion] = useState<Question>({
     question_text: "",
-    question_type: "text",
+    question_type: "short_answer",
     order: 1,
     is_required: true,
+    section_id: { 1: "기본" },
   });
 
   const [tempOption, setTempOption] = useState<Option>({
     value: "",
     label: "",
+    target_section: "",
+  });
+
+  const [currentSection, setCurrentSection] = useState<Section>({
+    id: "",
+    name: "",
+    order: 2,
   });
 
   // Handle form input changes
@@ -74,7 +98,27 @@ export default function CreateForm() {
     >
   ) => {
     const { name, value } = e.target;
-    setCurrentQuestion({ ...currentQuestion, [name]: value });
+
+    // Special handling for section_id
+    if (name === "section_id") {
+      if (!value) {
+        // If no section is selected, remove section_id
+        const newQuestion = { ...currentQuestion };
+        delete newQuestion.section_id;
+        setCurrentQuestion(newQuestion);
+      } else {
+        // Find the section with the selected ID
+        const section = formData.sections.find((s) => s.id === value);
+        if (section) {
+          setCurrentQuestion({
+            ...currentQuestion,
+            section_id: { [parseInt(section.id)]: section.name },
+          });
+        }
+      }
+    } else {
+      setCurrentQuestion({ ...currentQuestion, [name]: value });
+    }
   };
 
   // Handle adding an option to multiple choice or checkbox questions
@@ -84,7 +128,7 @@ export default function CreateForm() {
         ...currentQuestion,
         options: [...(currentQuestion.options || []), { ...tempOption }],
       });
-      setTempOption({ value: "", label: "" });
+      setTempOption({ value: "", label: "", target_section: "" });
     }
   };
 
@@ -118,20 +162,32 @@ export default function CreateForm() {
 
     // Add the question with a new order number
     const newOrder = formData.questions.length + 1;
+
+    // Create question object
+    const questionToAdd = { ...currentQuestion, order: newOrder };
+
+    // Only include section_id if it has a value
+    if (!questionToAdd.section_id) {
+      delete questionToAdd.section_id;
+    }
+
+    // Only include bun_gi for multiple_choice questions
+    if (questionToAdd.question_type !== "multiple_choice") {
+      delete questionToAdd.bun_gi;
+    }
+
     setFormData({
       ...formData,
-      questions: [
-        ...formData.questions,
-        { ...currentQuestion, order: newOrder },
-      ],
+      questions: [...formData.questions, questionToAdd],
     });
 
     // Reset current question form
     setCurrentQuestion({
       question_text: "",
-      question_type: "text",
+      question_type: "short_answer",
       order: newOrder + 1,
       is_required: true,
+      section_id: { 1: "기본" },
     });
   };
 
@@ -147,6 +203,72 @@ export default function CreateForm() {
     }));
 
     setFormData({ ...formData, questions: updatedQuestions });
+  };
+
+  // Add a new section
+  const handleAddSection = () => {
+    if (!currentSection.id || !currentSection.name) {
+      alert("섹션 ID와 이름을 모두 입력해주세요.");
+      return;
+    }
+
+    // Check if section ID already exists
+    if (formData.sections.some((section) => section.id === currentSection.id)) {
+      alert("이미 사용 중인 섹션 ID입니다.");
+      return;
+    }
+
+    // Add the section with a new order number
+    const newOrder = formData.sections.length + 1;
+    const sectionToAdd = { ...currentSection, order: newOrder };
+
+    setFormData({
+      ...formData,
+      sections: [...formData.sections, sectionToAdd],
+    });
+
+    // Reset current section form
+    setCurrentSection({
+      id: "",
+      name: "",
+      order: newOrder + 1,
+    });
+  };
+
+  // Remove a section
+  const handleRemoveSection = (index: number) => {
+    const sectionToRemove = formData.sections[index];
+
+    // Check if any questions use this section
+    const hasQuestions = formData.questions.some(
+      (q) =>
+        q.section_id &&
+        q.section_id[parseInt(sectionToRemove.id)] === sectionToRemove.name
+    );
+
+    if (hasQuestions) {
+      alert(
+        "이 섹션을 사용하는 질문이 있습니다. 먼저 해당 질문을 수정하거나 삭제해주세요."
+      );
+      return;
+    }
+
+    const newSections = [...formData.sections];
+    newSections.splice(index, 1);
+
+    // Update the order of remaining sections
+    const updatedSections = newSections.map((s, idx) => ({
+      ...s,
+      order: idx + 1,
+    }));
+
+    setFormData({ ...formData, sections: updatedSections });
+  };
+
+  // Handle section input changes
+  const handleSectionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setCurrentSection({ ...currentSection, [name]: value });
   };
 
   // Handle form submission
@@ -165,7 +287,15 @@ export default function CreateForm() {
     }
 
     try {
-      console.log(formData);
+      // Create a new object that matches the backend model by excluding sections
+      const submissionData = {
+        title: formData.title,
+        description: formData.description,
+        is_active: formData.is_active,
+        questions: formData.questions,
+      };
+
+      console.log(submissionData);
 
       const response = await fetch(
         `${import.meta.env.VITE_API_URL}/api/surveys/`,
@@ -174,7 +304,7 @@ export default function CreateForm() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(formData),
+          body: JSON.stringify(submissionData),
         }
       );
 
@@ -192,6 +322,13 @@ export default function CreateForm() {
         description: "",
         is_active: true,
         questions: [],
+        sections: [
+          {
+            id: "1",
+            name: "기본",
+            order: 1,
+          },
+        ],
       });
     } catch (error) {
       console.error("Error creating survey:", error);
@@ -265,6 +402,17 @@ export default function CreateForm() {
                       <strong>필수 여부:</strong>{" "}
                       {q.is_required ? "예" : "아니오"}
                     </p>
+                    {q.section_id && (
+                      <p>
+                        <strong>섹션 ID:</strong> {Object.keys(q.section_id)[0]}{" "}
+                        ({Object.values(q.section_id)[0]})
+                      </p>
+                    )}
+                    {q.bun_gi && (
+                      <p>
+                        <strong>분기 로직:</strong> 활성화됨
+                      </p>
+                    )}
 
                     {["multiple_choice", "checkboxes"].includes(
                       q.question_type
@@ -278,6 +426,8 @@ export default function CreateForm() {
                             {q.options.map((opt, idx) => (
                               <li key={idx}>
                                 {opt.label} ({opt.value})
+                                {opt.target_section &&
+                                  ` → 섹션: ${opt.target_section}`}
                               </li>
                             ))}
                           </ul>
@@ -297,6 +447,70 @@ export default function CreateForm() {
           ) : (
             <p className="no-questions">아직 추가된 질문이 없습니다.</p>
           )}
+        </div>
+
+        <div className="form-section">
+          <h2>섹션 관리</h2>
+          {formData.sections.length > 0 ? (
+            <div className="sections-list">
+              {formData.sections.map((section, index) => (
+                <div key={index} className="section-item">
+                  <div className="section-header">
+                    <span className="section-number">{section.order}</span>
+                    <h3>
+                      {section.name} (ID: {section.id})
+                    </h3>
+                    <div className="section-actions">
+                      {formData.sections.length > 1 && (
+                        <button
+                          type="button"
+                          className="delete-btn"
+                          onClick={() => handleRemoveSection(index)}
+                        >
+                          삭제
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="no-sections">아직 추가된 섹션이 없습니다.</p>
+          )}
+
+          <div className="add-section-form">
+            <h3>새 섹션 추가</h3>
+            <div className="form-group">
+              <label htmlFor="id">섹션 ID *</label>
+              <input
+                type="text"
+                id="id"
+                name="id"
+                value={currentSection.id}
+                onChange={handleSectionChange}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="name">섹션 이름 *</label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={currentSection.name}
+                onChange={handleSectionChange}
+                required
+              />
+            </div>
+            <button
+              type="button"
+              className="add-section-btn"
+              onClick={handleAddSection}
+            >
+              섹션 추가하기
+            </button>
+          </div>
         </div>
 
         <div className="form-section">
@@ -320,12 +534,11 @@ export default function CreateForm() {
               value={currentQuestion.question_type}
               onChange={handleQuestionChange}
             >
-              <option value="text">짧은 답변</option>
+              <option value="short_answer">단답형</option>
               <option value="paragraph">긴 답변</option>
               <option value="multiple_choice">객관식 (단일 선택)</option>
               <option value="checkboxes">객관식 (다중 선택)</option>
               <option value="rating">평가</option>
-              <option value="short_answer">단답형</option>
             </select>
           </div>
 
@@ -344,6 +557,45 @@ export default function CreateForm() {
               />
               필수 질문
             </label>
+
+            {/* 분기문 체크박스 (multiple_choice 유형일 때만 표시) */}
+            {currentQuestion.question_type === "multiple_choice" && (
+              <label className="checkbox-label" style={{ marginLeft: "20px" }}>
+                <input
+                  type="checkbox"
+                  name="has_branching"
+                  checked={!!currentQuestion.bun_gi}
+                  onChange={(e) =>
+                    setCurrentQuestion({
+                      ...currentQuestion,
+                      bun_gi: e.target.checked ? [] : undefined,
+                    })
+                  }
+                />
+                분기문
+              </label>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="section_id">섹션</label>
+            <select
+              id="section_id"
+              name="section_id"
+              value={
+                currentQuestion.section_id
+                  ? Object.keys(currentQuestion.section_id)[0]
+                  : ""
+              }
+              onChange={handleQuestionChange}
+            >
+              <option value="">섹션 없음</option>
+              {formData.sections.map((section, index) => (
+                <option key={index} value={section.id}>
+                  {section.name} (ID: {section.id})
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* 선택형 질문일 경우 옵션 추가 UI */}
@@ -361,6 +613,8 @@ export default function CreateForm() {
                       <div key={index} className="option-item">
                         <span>
                           {option.label} ({option.value})
+                          {option.target_section &&
+                            ` → 섹션: ${option.target_section}`}
                         </span>
                         <button
                           type="button"
@@ -393,6 +647,20 @@ export default function CreateForm() {
                       setTempOption({ ...tempOption, label: e.target.value })
                     }
                   />
+                  {/* 분기문이 활성화된 경우에만 이동할 섹션 입력 필드 표시 */}
+                  {currentQuestion.bun_gi && (
+                    <input
+                      type="text"
+                      placeholder="이동할 섹션 ID"
+                      value={tempOption.target_section || ""}
+                      onChange={(e) =>
+                        setTempOption({
+                          ...tempOption,
+                          target_section: e.target.value,
+                        })
+                      }
+                    />
+                  )}
                 </div>
                 <button
                   type="button"
